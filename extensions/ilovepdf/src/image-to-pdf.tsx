@@ -5,8 +5,6 @@ import {
   showToast,
   getPreferenceValues,
   Toast,
-  closeMainWindow,
-  open,
   openExtensionPreferences,
 } from "@raycast/api";
 import ILovePDFApi from "@ilovepdf/ilovepdf-nodejs";
@@ -15,14 +13,19 @@ import ILovePDFFile from "@ilovepdf/ilovepdf-nodejs/ILovePDFFile";
 import { useState } from "react";
 import fs from "fs";
 import path from "path";
+import { chooseDownloadLocation, getFilePath, handleOpenNow } from "./common/utils";
+import { Status } from "./common/types";
 
 type Values = {
   files: string[];
 };
 
-type Status = "init" | "success" | "failure";
-
-const { APIPublicKey: publicKey, APISecretKey: secretKey, OpenNow: openNow } = getPreferenceValues<Preferences>();
+const {
+  APIPublicKey: publicKey,
+  APISecretKey: secretKey,
+  OpenNow: openNow,
+  AskBeforeDownload: askBeforeDownload,
+} = getPreferenceValues<Preferences>();
 
 export default function Command() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -32,7 +35,7 @@ export default function Command() {
   async function handleSubmit(values: Values) {
     setIsLoading(true);
     if (!values.files.length) {
-      await showToast(Toast.Style.Failure, "You must select a single file", "Please select a file");
+      await showToast(Toast.Style.Failure, "You must select a single file.", "Please select a file.");
       setStatus("failure");
       setIsLoading(false);
       return;
@@ -44,9 +47,23 @@ export default function Command() {
     const fileExtension = path.extname(file);
     const fileName = path.basename(file, fileExtension);
     const directory = path.dirname(file);
-    const destinationFile = path.join(directory, `${fileName}.pdf`);
-    setDestinationFilePath(destinationFile);
+    let destinationFile = getFilePath(directory, `${fileName}.pdf`);
 
+    if (askBeforeDownload) {
+      const finalName = await chooseDownloadLocation(
+        destinationFile,
+        "Save The PDF As",
+        setIsLoading,
+        setStatus,
+        toast,
+      );
+      if (finalName == undefined) {
+        return;
+      }
+      destinationFile = finalName;
+    }
+
+    setDestinationFilePath(destinationFile);
     const instance = new ILovePDFApi(publicKey, secretKey);
     const task = instance.newTask("imagepdf") as ImagePdfTask;
 
@@ -59,30 +76,20 @@ export default function Command() {
       fs.writeFileSync(destinationFile, data);
       toast.style = Toast.Style.Success;
       toast.title = "success";
-      toast.message = "File converted successfully";
+      toast.message = "File converted successfully.";
       setStatus("success");
       setIsLoading(false);
     } catch (error) {
       toast.style = Toast.Style.Failure;
       toast.title = "failure";
-      toast.message = "Error happened during converting the file.";
+      toast.message = `Error happened during converting the file. Reason ${error}`;
       setStatus("failure");
       setIsLoading(false);
       console.log(error);
       return;
     }
 
-    if (openNow) {
-      await closeMainWindow();
-      open(destinationFile);
-    } else {
-      toast.primaryAction = {
-        title: "Open File",
-        onAction: () => {
-          open(destinationFile);
-        },
-      };
-    }
+    await handleOpenNow(openNow, destinationFile, toast);
   }
 
   return (
